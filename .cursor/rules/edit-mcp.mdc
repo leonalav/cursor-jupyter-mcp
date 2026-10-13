@@ -1,0 +1,247 @@
+---
+description: Editing workspace files with hash-guarded, atomic range edits.
+alwaysApply: true
+---
+
+# Precise file edits
+
+Prefer `edit_apply` over rewriting a whole file for any change to a file that
+already exists. Whole-file rewrites land on stale content and quietly reformat
+code you never meant to touch.
+
+## The loop
+
+1. Find the range with `edit_locate`. Do not count lines by eye.
+2. Call `file_read` for the lines you need, and keep the `hash` it returns.
+3. Call `edit_apply` with that hash as `base_hash` and your edits.
+
+Line numbers are 1-based and inclusive. All edits in one call refer to the same
+snapshot, so they must not overlap.
+
+```json
+{
+  "path": "src/app.py",
+  "base_hash": "sha256:9f2c…",
+  "edits": [
+    { "op": "replace", "range": { "start_line": 42, "end_line": 47 },
+      "new_text": "def fetch_user(self, user_id: str) -> User:\n    …\n" },
+    { "op": "insert", "after_line": 10, "new_text": "from pydantic import BaseModel\n" }
+  ]
+}
+```
+
+Operations: `replace` a range, `insert` after a line (`after_line: 0` is the top
+of the file), `delete` a range.
+
+## Finding the range with edit_locate
+
+Use `by: "symbol"` in Python and `by: "heading"` in Markdown. Both return
+`start_line`, `end_line`, and the file `hash`, so one call is enough.
+
+```json
+{ "path": "src/users/service.py", "by": "symbol", "name": "UserService.fetch_user" }
+{ "path": "README.md", "by": "heading", "text": "Installation" }
+```
+
+- `by: "symbol"` takes a dotted name and uses the parser's own line info. A
+  bare `fetch_user` works when only one function has that name.
+- `by: "heading"` returns the section through the next heading of the same or
+  higher level, so subsections come with it. Pass `include_subsections: false`
+  to stop at the first subheading. A `#` inside a fenced code block is not a
+  heading and will not be found.
+- `by: "anchor"` (the default) finds `text` verbatim or a `regex`. If the text
+  appears more than once the call fails as ambiguous and lists where it matched;
+  pass `occurrence: 0` to take the first, `1` for the second, and so on.
+
+**A symbol range includes decorators.** Replacing a decorated function with
+`new_text` that omits the decorator will delete it. Include it in your
+replacement.
+
+## Indentation
+
+`edit_apply` defaults to `indent_mode: "relative"`: the common margin is removed
+from `new_text` and the indentation of the surrounding block is re-applied. Write
+the code flush-left and it lands at the right depth.
+
+Your `new_text` must still be correct *relative to itself*. This lands correctly:
+
+```text
+def fetch_user(self, uid):
+    return {"id": uid}
+```
+
+This does not, because the body has no step of its own:
+
+```text
+def fetch_user(self, uid):
+return {"id": uid}
+```
+
+Pass `indent_mode: "absolute"` to write `new_text` exactly as sent.
+
+## Checking your work before you write
+
+`edit_apply` returns a `diagnostics` block on every call:
+
+```json
+"diagnostics": {
+  "new": [{ "tool": "ruff", "code": "F841", "message": "...", "line": 4 }],
+  "new_count": 1,
+  "new_error_count": 1,
+  "preexisting_count": 12,
+  "resolved_count": 0
+}
+```
+
+`new` holds only the problems **your edit introduced**. Problems that were already
+in the file are counted in `preexisting_count` and never reported as yours, so a
+file with existing lint debt stays editable. A problem that merely moved down a
+line because of your insert is not new either.
+
+`stages` says what actually ran. A stage that could not run appears as
+`"skipped"` with the reason, so a clean result is never mistaken for an
+unvalidated one.
+
+Use `validate_file` to check a file, or a block of proposed text, without
+touching anything:
+
+```json
+{ "path": "src/app.py" }
+{ "path": "src/app.py", "content": "def check():\n    return 1\n" }
+```
+
+## Controls on `edit_apply`
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `validate` | `warn` | `off` skip the checks; `warn` write and report; `strict` refuse a new error |
+| `format` | `range` | `none` leave spacing alone; `range` format only the edited lines; `full` format the whole file |
+| `autofix` | `none` | `safe` apply Ruff's safe fixes on the edited lines and the import block |
+| `require_all_stages` | `false` | In `strict`, also fail when a stage was skipped |
+
+`validate: "off"` turns off the *checks* only — syntax and lint. `format` and
+`autofix` are separate knobs and still run, so `validate: "off", format:
+"range"` formats your edit without linting it.
+
+Formatting is **range-contained**. Ruff's `--range` is used when available, so a
+long function elsewhere in the file is never reformatted by your edit to line 10.
+
+With `autofix: "safe"`, only Ruff's *safe* fixes are applied, and only to lines
+your edit touched (plus the import block, which is where import sorting lives).
+Unsafe fixes are never applied automatically.
+
+## Guarding a risky edit
+
+Add `expect` to any edit that depends on the current content of its range. It
+must appear in that range, or the edit is rejected and you are shown what is
+actually there:
+
+```json
+{ "op": "replace",
+  "range": { "start_line": 42, "end_line": 47 },
+  "expect": "def fetch_user(",
+  "new_text": "…" }
+```
+
+Use it whenever the edit could do damage if the file moved.
+
+## Before you commit
+
+Pass `dry_run: true` to see the diff without writing.
+
+## When something is rejected
+
+Every rejection comes back with a code and a hint. Read the hint and fix the call
+rather than retrying it unchanged.
+
+| Code | What it means | What to do |
+| --- | --- | --- |
+| `STALE_HASH` | The file changed since your read | Re-read, then re-issue the edit |
+| `ANCHOR_NOT_FOUND` | Nothing matched, or it matched ambiguously | The error lists candidates; use one, or pass `occurrence` |
+| `RANGE_OUT_OF_BOUNDS` | Line numbers fall outside the file | Use the `line_count` in the error |
+| `EXPECTED_TEXT_MISMATCH` | The range no longer contains your `expect` text | Use `current_text` from the error, or re-read |
+| `OVERLAPPING_EDITS` | Two edits touch the same lines | Combine them into one edit, or split the batch |
+| `SYNTAX_ERROR_INTRODUCED` | `strict` mode: the edit would not parse | Fix `new_text` and retry; the error has the line and column |
+| `LINT_REGRESSION` | `strict` mode: the edit adds a new problem | Fix the named rules and retry |
+| `PATH_FORBIDDEN` | Outside the workspace, or a protected file | Edit a different file, or ask the user |
+| `FILE_EXISTS` | `file_create` found the path taken | Edit it with `edit_apply`, or pass `overwrite` |
+| `NOTEBOOK_INVALID` | Not valid JSON, or fails the nbformat schema | Check the file is a real `.ipynb` |
+| `CELL_NOT_FOUND` | No cell with that id | The error lists the ids that exist; re-read `nb_outline` |
+
+`STALE_HASH` is a safety net working as intended, not an obstacle. It usually
+means the user saved the file while you were working. Re-read and continue.
+
+On `SYNTAX_ERROR_INTRODUCED` and `LINT_REGRESSION`, **fix the reported problem
+and retry. Do not switch to `validate: "off"`** to get the edit through; that
+leaves the user with a file you know is broken. If you genuinely need to write it,
+say so and let the user decide.
+
+## Notebooks
+
+Never edit a `.ipynb` by targeting line numbers in its JSON. Use the notebook
+tools.
+
+Start with `nb_outline`, then use the `cell_id` it returns:
+
+```json
+{ "path": "analysis.ipynb" }
+{ "path": "analysis.ipynb", "cell_id": "a1b2c3d4", "include_outputs": true }
+{ "path": "analysis.ipynb", "cell_id": "a1b2c3d4", "source": "df = pd.read_csv(p)" }
+{ "path": "analysis.ipynb", "cell_id": "a1b2c3d4",
+  "range": { "start_line": 12, "end_line": 14 }, "source": "…" }
+{ "path": "analysis.ipynb", "source": "## Cleaning", "cell_type": "markdown",
+  "after_cell_id": "a1b2c3d4" }
+{ "path": "analysis.ipynb", "cell_id": "e5f6a7b8", "destination": 0 }
+{ "path": "analysis.ipynb", "cell_id": "e5f6a7b8" }
+{ "path": "analysis.ipynb", "cell_id": "a1b2c3d4" }
+{ "path": "analysis.ipynb", "stop_on_error": true, "restart_kernel": false }
+{ "path": "analysis.ipynb", "cell_start": 3, "cell_end": 5 }
+{ "path": "analysis.ipynb", "action": "status" }
+{ "path": "analysis.ipynb", "action": "restart" }
+{ "path": "analysis.ipynb", "action": "shutdown" }
+```
+
+**Use `cell_id`, never `cell_number`, for edits.** Numbers shift the moment a
+cell is inserted, deleted, or moved; ids do not. If you do use a number, re-read
+`nb_outline` after any structural change.
+
+**`range` is cell-relative.** Line 1 is the first line of that cell, not of the
+file. Read the cell first with `nb_cell_read`, or you will guess wrong.
+
+Changing a code cell's source clears its outputs and `execution_count`. That is
+deliberate: a printed result that no longer matches the code is misleading. Pass
+`keep_outputs: true` to keep them.
+
+Notebook diagnostics come back as `cell_id` plus a cell-relative line, and
+`validate: "strict"` refuses a change that introduces a new one. On
+`LINT_REGRESSION`, fix the named cell and retry.
+
+Cells are run on a real Python kernel, one per notebook. State from one cell is
+visible to the next, the same way Jupyter behaves. The first execution starts
+the kernel; subsequent calls reuse it. A kernel persists across the four
+mutators and the four execution tools until `kernel_control: shutdown` or
+until the server restarts.
+
+`persist: true` (default) writes the cell's outputs back to the notebook. Pass
+`persist: false` to execute without saving — useful for dry-running code.
+
+`execute_all_cells` with `stop_on_error: true` halts at the first error;
+`restart_kernel: true` discards the interpreter's state and starts fresh. A
+markdown or raw cell inside an execution range is reported as `skipped`, not
+run; passing one to `execute_cell` on its own returns `CELL_NOT_CODE`.
+
+The per-cell `timeout_s` interrupts the kernel on expiry. The result's
+`error.reason` is `"timeout"`; the kernel is otherwise unaffected. To break a
+running cell by hand, call `kernel_control: interrupt`.
+
+## Scope
+
+This build has fifteen tools: `file_read`, `edit_locate`, `edit_apply`,
+`file_create`, `validate_file`, `nb_outline`, `nb_cell_read`, `nb_cell_insert`,
+`nb_cell_update`, `nb_cell_delete`, `nb_cell_move`, `execute_cell`,
+`execute_all_cells`, `execute_cells_in_range`, `kernel_control`.
+
+Validation covers Python and Markdown, plus notebook code cells. Other file
+types are edited without a syntax or lint stage; `stages` will show them as
+`skipped`. Percent-format `# %%` scripts are not segmented yet — edit them with
+`edit_apply` on the `.py` file.

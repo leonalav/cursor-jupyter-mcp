@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "cursor-edit": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["cursor-edit-mcp"],
+      "env": {
+        "WORKSPACE_ROOT": "${workspaceFolder}"
+      }
+    }
+  }
+}

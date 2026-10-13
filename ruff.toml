@@ -1,0 +1,29 @@
+# Ruff configuration.
+#
+# Deliberately not broad: this project runs a linter over the agent's own edits
+# in M2, so the rules configured here are the ones it will later be expected to
+# agree with.
+
+line-length = 90
+
+[lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplify
+]
+ignore = [
+    # Nested `async with` is deliberate in the stdio test harness: anyio
+    # requires its context managers to be entered and exited in the same task.
+    "SIM117",
+]
+
+[lint.per-file-ignores]
+# Fixture helpers assert on a live tool result; B011 flags those assertions.
+"tests/*" = ["B011"]
+
+[format]
+indent-style = "space"

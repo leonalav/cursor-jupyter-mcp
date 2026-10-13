@@ -1,0 +1,53 @@
+[project]
+name = "cursor-edit-mcp"
+version = "0.1.0"
+description = "Precise, guarded editing tools for Cursor's agent over MCP."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "cursor-edit-mcp contributors" }]
+requires-python = ">=3.11"
+keywords = ["mcp", "cursor", "editor", "jupyter", "validation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+]
+dependencies = [
+    "ipykernel>=6.29",
+    "jupyter-client>=8.6",
+    "markdown-it-py>=3.0",
+    "mcp>=2.3.0",
+    "mypy>=1.10",
+    "nbformat>=5.9",
+    "pydantic>=2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/example/cursor-edit-mcp"
+Issues = "https://github.com/example/cursor-edit-mcp/issues"
+
+[project.scripts]
+cursor-edit-mcp = "cursor_edit_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "cursor_edit_mcp"
+module-root = "src"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
