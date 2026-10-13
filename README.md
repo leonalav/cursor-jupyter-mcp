@@ -11,13 +11,6 @@ every edit is pinned to a content hash of the file it was planned against, and
 every write is atomic. If the file changed underneath the agent, the edit is
 rejected instead of silently landing in the wrong place.
 
-**Status: M6.** Range edits, addressing, atomic writes, the validation pipeline
-(syntax, range-contained format, lint with baseline diffing, `strict` mode), the
-six notebook cell tools (now also operating on percent-format `.py` scripts),
-cell execution against a real Python kernel (one kernel per file, persisted
-outputs on `.ipynb` only, timeouts, restart, interrupt, shutdown), kernel
-discovery, remote-kernel attachment via a Jupyter connection file, and
-opt-in type checking with `pyright` or `mypy` are working.
 
 ---
 
