@@ -28,3 +28,4 @@ Thumbs.db
 *.key
 .cursor
 PRD.md
+.gitignore
